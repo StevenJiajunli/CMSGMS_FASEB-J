@@ -1,6 +1,7 @@
-###通过上面的操作，我们把训练集和测试集都已经准备好了。接下来开始机器学习。
+# Set working directory
 setwd("~/Steven Lijiajun/Steven/SLE/1. SLE CD14_Mono GSHstate/机器学习_113机器学习方案/ML_only")
-#引用包
+
+# Load required packages
 library(openxlsx)
 library(seqinr)
 library(plyr)
@@ -19,77 +20,81 @@ library(ComplexHeatmap)
 library(RColorBrewer)
 library(pROC)
 
-
-#设置工作目录
-
+# Source custom ML functions
 source("refer.ML.R")
 
-#读取训练组的数据文件
+# Load training dataset
 train_data <- read.csv("training_data.csv", row.names = 1, stringsAsFactors = FALSE)
-# 分离特征和标签
+
+# Separate features and labels
 train_features <- train_data[, -ncol(train_data), drop = FALSE]
-train_labels <- train_data[, ncol(train_data),drop = F]
+train_labels <- train_data[, ncol(train_data), drop = F]
 
-
-# 读取测试数据
+# Load testing dataset
 test_data <- read.csv("testing_data.csv", row.names = 1, stringsAsFactors = FALSE)
 test_features <- test_data[, -ncol(test_data), drop = FALSE]
-test_labels <- test_data[, ncol(test_data),drop = F]
-test_labels$Cohort <- gsub("(.+)\\_(.+)\\_(.+)",'\\1',rownames(test_data))
+test_labels <- test_data[, ncol(test_data), drop = F]
 
+# Extract cohort information from sample names
+test_labels$Cohort <- gsub("(.+)\\_(.+)\\_(.+)", '\\1', rownames(test_data))
 
-
-#获取训练组和验证组的交集基因
-# 确保训练集和测试集特征一致
+# Ensure training and testing datasets share the same features
 common_features <- intersect(colnames(train_features), colnames(test_features))
 train_data <- as.matrix(train_data[, common_features])
 test_data <- as.matrix(test_data[, common_features])
-train_data = scaleData(train_data, centerFlags=T, scaleFlags=T) 
-test_data = scaleData(test_data, cohort = test_labels$Cohort, centerFlags = T, scaleFlags = T)
 
+# Standardize data
+train_data = scaleData(train_data, centerFlags = TRUE, scaleFlags = TRUE)
+test_data = scaleData(test_data, cohort = test_labels$Cohort, centerFlags = TRUE, scaleFlags = TRUE)
 
-# ==== 糖尿病机器学习分析流程 ====
-#读取机器学习方法的文件
-methods <- read.table("113_ML_methods.txt", header=T, sep="\t", check.names=F)
+# ==== Diabetes machine learning analysis workflow ====
+
+# Load list of machine learning methods
+methods <- read.table("113_ML_methods.txt", header = TRUE, sep = "\t", check.names = FALSE)
 methods <- methods$x
 
-#准备机器学习模型的参数
-classVar = "Group"         #设置分类的变量名
-min.selected.var = 5      #基因数目的阈值
+# Prepare ML model parameters
+classVar = "Group"            # Name of classification variable
+min.selected.var = 5          # Threshold for number of selected genes
 Variable = colnames(train_features)
-preTrain.method =  c("Lasso","glmBoost","RF","Stepglm[both]","Stepglm[backward]")
+preTrain.method = c("Lasso", "glmBoost", "RF", "Stepglm[both]", "Stepglm[backward]")
 
-######################根据训练组数据构建机器学习模型######################
-#根据模型组合第一种机器学习方法筛选变量
-preTrain.var <- list()       #用于保存各算法筛选的变量
-set.seed(seed = 123)         #设置种子
-# 初始化列表存储时间结果
+###################### Build ML models using training data ######################
+# Initialize list to store preselected variables
+preTrain.var <- list()
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Initialize list to store runtime for each method
 time.list <- list()
+
+# Loop through each pre-training method to select features
 for (method in preTrain.method) {
-  # 记录当前方法的运行时间
   time.taken <- system.time({
     preTrain.var[[method]] <- RunML(
       method = method,
       Train_set = train_data,
       Train_label = train_labels,
-      mode = "Variable",
+      mode = "Variable",  # Run in variable selection mode
       classVar = classVar
     )
   })
   
-  # 存储时间结果（真实时间）
-  time.list[[method]] <- time.taken[["elapsed"]]  # 单位：秒
+  # Store elapsed time in seconds
+  time.list[[method]] <- time.taken[["elapsed"]]
   
-  # 打印当前方法的耗时
+  # Print runtime for current method
   cat(sprintf("Method [%s] took %.2f seconds\n", method, time.taken[["elapsed"]]))
 }
+
+# Add all features as a simple baseline
 preTrain.var[["simple"]] <- colnames(train_data)
 
-# 安装并加载UpSetR包
-# install.packages("UpSetR")
+# Load UpSetR package for visualizing feature intersections
 library(UpSetR)
 
-# 提取各算法选中的基因列表
+# Extract selected gene lists from each algorithm
 gene_lists <- list(
   Lasso = preTrain.var$Lasso,
   glmBoost = preTrain.var$glmBoost,
@@ -98,216 +103,227 @@ gene_lists <- list(
   Step_back = preTrain.var$`Stepglm[backward]`
 )
 
-# 创建交集矩阵
+# Create UpSet matrix
 upset_data <- fromList(gene_lists)
+allcolour = c('#DF0A1F','#1C5BA7','#019E73','#ED621B','#E477C1')
 
-allcolour=c('#DF0A1F','#1C5BA7','#019E73','#ED621B','#E477C1')
-
-
-# 绘制UpSet图
-pdf("gene_intersection_upset.pdf", width=10, height=6)
-upset(upset_data, sets = names(gene_lists), 
-      order.by = "freq", 
+# Plot UpSet diagram
+pdf("gene_intersection_upset.pdf", width = 10, height = 6)
+upset(upset_data, sets = names(gene_lists),
+      order.by = "freq",
       text.scale = 1.2,
       matrix.color = allcolour,
       mainbar.y.label = "Gene number intersected",
       sets.x.label = "Gene number selected")
 dev.off()
 
-# 计算核心共同基因
+# Identify core intersecting genes
 core_genes <- Reduce(intersect, gene_lists)
-write.table(core_genes, "core_genes.txt", quote=FALSE, row.names=FALSE, col.names=FALSE)
+write.table(core_genes, "core_genes.txt", quote = FALSE, row.names = FALSE, col.names = FALSE)
 
+###################### Build ML models using selected features ######################
+model <- list()           # Initialize list to store models
+set.seed(123)             # Set seed for reproducibility
+Train_set_bk = train_data # Backup training data
 
-
-
-
-#根据模型组合第二种机器学习方法构建模型
-model <- list()            #初始化模型结果列表
-set.seed(seed = 123)       #设置种子
-Train_set_bk = train_data
-for (method in methods){
+# Loop through each ML method to build models
+for (method in methods) {
   cat(match(method, methods), ":", method, "\n")
   method_name = method
   method <- strsplit(method, "\\+")[[1]]
   if (length(method) == 1) method <- c("simple", method)
+  
   Variable = preTrain.var[[method[1]]]
   train_data = Train_set_bk[, Variable]
   Train_label = train_labels
-  model[[method_name]] <- RunML(method = method[2],           #机器学习方法
-                                Train_set = train_data,        #训练组的基因表达数据
-                                Train_label = train_labels,    #训练组的分类数据
-                                mode = "Model",               #选择运行模式(构建模型)
-                                classVar = classVar)
   
-  #如果某种机器学习方法筛选出的变量小于阈值，则该方法结果为空
-  if(length(ExtractVar(model[[method_name]])) <= min.selected.var) {
+  # Build ML model
+  model[[method_name]] <- RunML(
+    method = method[2],        # ML algorithm
+    Train_set = train_data,    # Training expression data
+    Train_label = train_labels,# Training labels
+    mode = "Model",            # Run in model building mode
+    classVar = classVar
+  )
+  
+  # Remove model if number of selected variables is below threshold
+  if (length(ExtractVar(model[[method_name]])) <= min.selected.var) {
     model[[method_name]] <- NULL
   }
 }
+
+# Restore original training data
 train_data = Train_set_bk; rm(Train_set_bk)
-#保存所有机器学习模型的结果
+
+# Save all ML model results
 saveRDS(model, "model.MLmodel.rds")
 
-#根据基因表达量计算每个样本的分类得分
-model <- readRDS("model.MLmodel.rds")            #使用各个机器学习模型的线性组合函数计算得分
-methodsValid <- names(model)                     #根据特征基因数目提取有效的模型
-#根据基因表达量预测样本的风险得分
+###################### Calculate sample prediction scores ######################
+# Load ML model results
+model <- readRDS("model.MLmodel.rds")
+
+# Identify valid models based on selected features
+methodsValid <- names(model)
+
+# Predict risk scores for each sample using valid models
 RS_list <- list()
-for (method in methodsValid){
-  RS_list[[method]] <- CalPredictScore(fit = model[[method]], new_data = rbind.data.frame(train_data,test_data))
+for (method in methodsValid) {
+  RS_list[[method]] <- CalPredictScore(fit = model[[method]], new_data = rbind.data.frame(train_data, test_data))
 }
-riskTab=as.data.frame(t(do.call(rbind, RS_list)))
-riskTab=cbind(id=row.names(riskTab), riskTab)
-write.table(riskTab, "model.riskMatrix.txt", sep="\t", row.names=F, quote=F)
 
-#根据基因表达量预测样品的分类
+# Combine risk scores into a matrix
+riskTab = as.data.frame(t(do.call(rbind, RS_list)))
+riskTab = cbind(id = row.names(riskTab), riskTab)
+write.table(riskTab, "model.riskMatrix.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+
+# Predict class labels for each sample
 Class_list <- list()
-for (method in methodsValid){
-  Class_list[[method]] <- PredictClass(fit = model[[method]], new_data = rbind.data.frame(train_data,test_data))
+for (method in methodsValid) {
+  Class_list[[method]] <- PredictClass(fit = model[[method]], new_data = rbind.data.frame(train_data, test_data))
 }
-Class_mat <- as.data.frame(t(do.call(rbind, Class_list)))
-#Class_mat <- cbind.data.frame(Test_class, Class_mat[rownames(Class_mat),]) # 若要合并测试集本身的样本信息文件可运行此行
-classTab=cbind(id=row.names(Class_mat), Class_mat)
-write.table(classTab, "model.classMatrix.txt", sep="\t", row.names=F, quote=F)
 
-#提取每种机器学习方法筛选到的变量
+Class_mat <- as.data.frame(t(do.call(rbind, Class_list)))
+classTab = cbind(id = row.names(Class_mat), Class_mat)
+write.table(classTab, "model.classMatrix.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+
+# Extract variables selected by each ML model
 fea_list <- list()
 for (method in methodsValid) {
   fea_list[[method]] <- ExtractVar(model[[method]])
 }
-fea_df <- lapply(model, function(fit){
+
+fea_df <- lapply(model, function(fit) {
   data.frame(ExtractVar(fit))
 })
 fea_df <- do.call(rbind, fea_df)
 fea_df$algorithm <- gsub("(.+)\\.(.+$)", "\\1", rownames(fea_df))
 colnames(fea_df)[1] <- "features"
-write.table(fea_df, file="model.genes.txt", sep = "\t", row.names = F, col.names = T, quote = F)
+write.table(fea_df, file = "model.genes.txt", sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 
-#计算每个模型的AUC值
+###################### Calculate AUC for each model ######################
 AUC_list <- list()
-for (method in methodsValid){
-  AUC_list[[method]] <- RunEval(fit = model[[method]],      #机器学习模型
-                                Test_set = test_data,        #验证组的表达数据
-                                Test_label = test_labels,    #验证组的分类数据
-                                Train_set = train_data,      #训练组的表达数据
-                                Train_label = train_labels,  #训练组的分类数据
-                                Train_name = "Train",       #训练组的标签
-                                cohortVar = "Cohort",       #GEO的id
-                                classVar = classVar)        #分类变量
+for (method in methodsValid) {
+  AUC_list[[method]] <- RunEval(
+    fit = model[[method]],        # ML model
+    Test_set = test_data,         # Testing expression data
+    Test_label = test_labels,     # Testing labels
+    Train_set = train_data,       # Training expression data
+    Train_label = train_labels,   # Training labels
+    Train_name = "Train",         # Training set name
+    cohortVar = "Cohort",         # Cohort ID
+    classVar = classVar           # Classification variable
+  )
 }
+
+# Combine AUC results into a matrix
 AUC_mat <- do.call(rbind, AUC_list)
-aucTab=cbind(Method=row.names(AUC_mat), AUC_mat)
-write.table(aucTab, "model.AUCmatrix.txt", sep="\t", row.names=F, quote=F)
+aucTab = cbind(Method = row.names(AUC_mat), AUC_mat)
+write.table(aucTab, "model.AUCmatrix.txt", sep = "\t", row.names = FALSE, quote = FALSE)
 
+###################### Plot AUC heatmap ######################
+# Load AUC matrix
+AUC_mat <- read.table("model.AUCmatrix.txt", header = TRUE, sep = "\t", check.names = FALSE, row.names = 1, stringsAsFactors = FALSE)
 
-##############################绘制AUC热图##############################
-#准备图形的数据
-AUC_mat <- read.table("model.AUCmatrix.txt", header=T, sep="\t", check.names=F, row.names=1, stringsAsFactors=F)
-
-#根据AUC的均值对机器学习模型进行排序
+# Sort ML models by mean AUC
 avg_AUC <- apply(AUC_mat, 1, mean)
-avg_AUC <- sort(avg_AUC, decreasing = T)
+avg_AUC <- sort(avg_AUC, decreasing = TRUE)
 AUC_mat <- AUC_mat[names(avg_AUC),]
-#获取最优模型(训练组+测试组的AUC均值最大)
+
+# Select features from the best model
 fea_sel <- fea_list[[rownames(AUC_mat)[1]]]
 avg_AUC <- as.numeric(format(avg_AUC, digits = 3, nsmall = 3))
 
-#设置热图注释的颜色
+# Define colors for cohort annotations
 CohortCol <- brewer.pal(n = ncol(AUC_mat), name = "Paired")
 names(CohortCol) <- colnames(AUC_mat)
 
-#绘制图形
+# Plot heatmap
 cellwidth = 1; cellheight = 0.5
-hm <- SimpleHeatmap(Cindex_mat = AUC_mat,       #AUC矩阵
-                    avg_Cindex = avg_AUC,       #AUC均值
-                    CohortCol = CohortCol,      #数据集的颜色
-                    barCol = "steelblue",       #右侧柱状图的颜色
-                    cellwidth = cellwidth, cellheight = cellheight,    #热图每个格子的宽度和高度
-                    cluster_columns = F, cluster_rows = F)      #是否对数据进行聚类
+hm <- SimpleHeatmap(
+  Cindex_mat = AUC_mat,       # AUC matrix
+  avg_Cindex = avg_AUC,       # Average AUC
+  CohortCol = CohortCol,      # Cohort colors
+  barCol = "steelblue",       # Color of side bar
+  cellwidth = cellwidth, cellheight = cellheight,
+  cluster_columns = FALSE, cluster_rows = FALSE
+)
 
-#输出热图
-pdf(file="ML_AUC_heatmap.pdf", width=cellwidth * ncol(AUC_mat) + 6, height=cellheight * nrow(AUC_mat) * 0.45)
-draw(hm, heatmap_legend_side="right", annotation_legend_side="right")
+pdf(file = "ML_AUC_heatmap.pdf", width = cellwidth * ncol(AUC_mat) + 6, height = cellheight * nrow(AUC_mat) * 0.45)
+draw(hm, heatmap_legend_side = "right", annotation_legend_side = "right")
 dev.off()
 
-
-
-
-
+###################### ROC analysis per cohort ######################
 library(pROC)
 
-rsFile="model.riskMatrix.txt"       #风险矩阵文件
-method="glmBoost+LDA"               #选择机器学习的方法(需要根据热图进行修改)
+rsFile = "model.riskMatrix.txt"      # Risk score matrix file
+method = "glmBoost+LDA"              # Selected ML method (based on heatmap)
 
+# Load risk score file
+riskRT = read.table(rsFile, header = TRUE, sep = "\t", check.names = FALSE, row.names = 1)
 
-#读取风险文件
-riskRT=read.table(rsFile, header=T, sep="\t", check.names=F, row.names=1)
-#获取数据集的ID
-CohortID=gsub("(.*)\\_(.*)\\_(.*)", "\\1", rownames(riskRT))
-CohortID=gsub("(.*)\\.(.*)", "\\1", CohortID)
-riskRT$Cohort=CohortID
+# Extract cohort ID from sample names
+CohortID = gsub("(.*)\\_(.*)\\_(.*)", "\\1", rownames(riskRT))
+CohortID = gsub("(.*)\\.(.*)", "\\1", CohortID)
+riskRT$Cohort = CohortID
 
-#对数据集进行循环
-for(Cohort in unique(riskRT$Cohort)){
-  #提取样品的分组信息(对照组和实验组)
-  rt=riskRT[riskRT$Cohort==Cohort,]
-  y=gsub("(.*)\\_(.*)\\_(.*)", "\\3", row.names(rt))
-  y=ifelse(y=="Control", 0, 1)
+# Loop through cohorts to plot ROC curves
+for (Cohort in unique(riskRT$Cohort)) {
+  rt = riskRT[riskRT$Cohort == Cohort, ]
   
-  #绘制ROC曲线
-  roc1=roc(y, as.numeric(rt[,method]))      #得到模型ROC曲线的参数
-  ci1=ci.auc(roc1, method="bootstrap")      #得到ROC曲线下面积的波动范围
-  ciVec=as.numeric(ci1)
-  pdf(file=paste0("ROC.", Cohort, ".pdf"), width=5, height=4.75)
-  plot(roc1, print.auc=TRUE, col="red", legacy.axes=T, main=Cohort)
-  text(0.39, 0.43, paste0("95% CI: ",sprintf("%.03f",ciVec[1]),"-",sprintf("%.03f",ciVec[3])), col="red")
+  # Extract sample class (Control vs Case)
+  y = gsub("(.*)\\_(.*)\\_(.*)", "\\3", row.names(rt))
+  y = ifelse(y == "Control", 0, 1)
+  
+  # Generate ROC curve
+  roc1 = roc(y, as.numeric(rt[, method]))
+  ci1 = ci.auc(roc1, method = "bootstrap")
+  ciVec = as.numeric(ci1)
+  
+  # Save ROC plot
+  pdf(file = paste0("ROC.", Cohort, ".pdf"), width = 5, height = 4.75)
+  plot(roc1, print.auc = TRUE, col = "red", legacy.axes = TRUE, main = Cohort)
+  text(0.39, 0.43, paste0("95% CI: ", sprintf("%.03f", ciVec[1]), "-", sprintf("%.03f", ciVec[3])), col = "red")
   dev.off()
 }
 
-
-
-#引用包
+###################### ROC analysis for individual genes ######################
 library(glmnet)
 library(pROC)
 
-expFile="merged_normalized_data.txt"      #表达数据文件
-geneFile="model.genes.txt"      #基因列表文件
+expFile = "merged_normalized_data.txt"  # Expression data file
+geneFile = "model.genes.txt"            # Selected genes file
 
+# Load expression data
+rt = read.table(expFile, header = TRUE, sep = "\t", check.names = FALSE, row.names = 1)
 
-#读取表达数据文件
-rt=read.table(expFile, header=T, sep="\t", check.names=F, row.names=1)
+# Extract sample class (Control vs Case)
+y = gsub("(.*)\\_(.*)\\_(.*)", "\\3", colnames(rt))
+y = ifelse(y == "Control", 0, 1)
 
-#提取样品的分组信息(对照组和实验组)
-y=gsub("(.*)\\_(.*)\\_(.*)", "\\3", colnames(rt))
-y=ifelse(y=="Control", 0, 1)
-
-#读取基因列表文件
-geneRT=read.table(geneFile, header=F, sep="\t", check.names=F)
-
+# Load gene list
+geneRT = read.table(geneFile, header = FALSE, sep = "\t", check.names = FALSE)
 geneRT <- geneRT$V1[geneRT$V2 == 'glmBoost+RF']
 
-#定义图形的颜色
-bioCol=rainbow(length(geneRT), s=0.9, v=0.9)
+# Define color palette for plotting
+bioCol = rainbow(length(geneRT), s = 0.9, v = 0.9)
 
-#对基因进行循环，绘制ROC曲线
-aucText=c()
-k=0
-for(x in as.vector(geneRT)){
-  k=k+1
-  #绘制ROC曲线
-  roc1=roc(y, as.numeric(rt[x,]))     #得到ROC曲线的参数
-  if(k==1){
-    pdf(file="ROC.genes.pdf", width=9, height=9)
-    plot(roc1, print.auc=F, col=bioCol[k], legacy.axes=T, main="", lwd=3)
-    aucText=c(aucText, paste0(x,", AUC=",sprintf("%.3f",roc1$auc[1])))
-  }else{
-    plot(roc1, print.auc=F, col=bioCol[k], legacy.axes=T, main="", lwd=3, add=TRUE)
-    aucText=c(aucText, paste0(x,", AUC=",sprintf("%.3f",roc1$auc[1])))
+# Loop through genes to plot ROC curves
+aucText = c()
+k = 0
+for (x in as.vector(geneRT)) {
+  k = k + 1
+  roc1 = roc(y, as.numeric(rt[x, ]))
+  
+  if (k == 1) {
+    pdf(file = "ROC.genes.pdf", width = 9, height = 9)
+    plot(roc1, print.auc = FALSE, col = bioCol[k], legacy.axes = TRUE, main = "", lwd = 3)
+    aucText = c(aucText, paste0(x, ", AUC=", sprintf("%.3f", roc1$auc[1])))
+  } else {
+    plot(roc1, print.auc = FALSE, col = bioCol[k], legacy.axes = TRUE, main = "", lwd = 3, add = TRUE)
+    aucText = c(aucText, paste0(x, ", AUC=", sprintf("%.3f", roc1$auc[1])))
   }
 }
-#绘制图例，得到ROC曲线下的面积
-legend("bottomright", aucText, lwd=3, bty="n", 
-       cex=0.8, col=bioCol[1:(ncol(rt)-1)],
-       inset = c(0.05, 0))  # 向右移动5%图形宽度
+
+# Add legend showing AUC for each gene
+legend("bottomright", aucText, lwd = 3, bty = "n", cex = 0.8, col = bioCol[1:(ncol(rt)-1)], inset = c(0.05, 0))
 dev.off()
